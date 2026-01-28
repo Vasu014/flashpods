@@ -35,15 +35,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let db = Database::new("flashpods.db").await?;
-    
-    let state = AppState { db };
 
     let app = Router::new()
         .route("/health", get(health))
+        .with_state(AppState { db })
         .nest("/uploads", uploads::routes())
         .nest("/jobs", jobs::routes())
-        .nest("/artifacts", artifacts::routes())
-        .with_state(state);
+        .nest("/artifacts", artifacts::routes());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     info!("listening on {}", addr);

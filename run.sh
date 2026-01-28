@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # run.sh - Continuous loop wrapper
 # Usage: ./run.sh [max_iterations]
+# Environment vars:
+#   PRETTY_PRINT_DEBUG=1   Enable verbose debug output
 
 set -e
 
 MAX_ITERATIONS=${1:-0}
 ITERATION=0
 PAUSE_BETWEEN=2
+
+# Export debug flag for pretty_print.py
+export PRETTY_PRINT_DEBUG=${PRETTY_PRINT_DEBUG:-false}
 
 # Colors
 GREEN='\033[0;32m'
@@ -26,6 +31,7 @@ echo -e "${DIM}Started:        $(date)${NC}"
 echo ""
 
 while true; do
+    echo -e "${DIM}[run.sh] Starting iteration $((ITERATION + 1)) at $(date +%H:%M:%S)${NC}"
     ./loop.sh
     EXIT_CODE=$?
 

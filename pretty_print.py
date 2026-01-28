@@ -10,7 +10,18 @@ Usage: opencode run --format json "prompt" | ./pretty_print.py
 
 import sys
 import json
+import os
 from datetime import datetime
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+# Maximum lines of output to show per tool (can be overridden via PRETTY_PRINT_MAX_LINES env var)
+MAX_LINES = int(os.environ.get("PRETTY_PRINT_MAX_LINES", "100"))
+
+# Enable debug output (can be overridden via PRETTY_PRINT_DEBUG env var)
+DEBUG = os.environ.get("PRETTY_PRINT_DEBUG", "false").lower() in ("true", "1", "yes")
 
 # ============================================================================
 # COLORS & ICONS
@@ -110,6 +121,8 @@ def truncate(s: str, max_len: int = 100) -> str:
 
 def format_tool_input(tool_name: str, input_data: dict) -> str:
     """Format tool input for display."""
+    if not input_data:
+        return ""
     if "command" in input_data:
         return truncate(input_data["command"], 80)
     # Handle both 'path' and 'file_path' (Read tool uses file_path)
@@ -173,7 +186,7 @@ def stderr(msg: str):
 
 
 # ============================================================================
-# STREAM PROCESSOR
+# STREAM PROCESSOR (OpenCode Format)
 # ============================================================================
 
 
@@ -187,288 +200,308 @@ class StreamProcessor:
             "tool_calls": 0,
             "tokens_in": 0,
             "tokens_out": 0,
+            "tokens_reasoning": 0,
+            "tokens_cache_read": 0,
             "start_time": datetime.now(),
         }
+        if DEBUG:
+            print(
+                f"{C.DIM}[DEBUG] StreamProcessor initialized at {self.stats['start_time'].strftime('%H:%M:%S')}{C.RESET}",
+                flush=True,
+            )
 
     def process_line(self, line: str):
         """Process a single line of stream output."""
         line = line.strip()
         if not line:
+            if DEBUG:
+                print(f"{C.DIM}[DEBUG] Empty line skipped{C.RESET}", flush=True)
             return
 
         # Check for rate limit or error in plain text
-        if not line.startswith("{") and (
-            "you've hit your limit" in line.lower()
-            or "rate limit" in line.lower()
-            or "error" in line.lower()
-        ):
-            print(f"{C.YELLOW}{line}{C.RESET}")
-            stderr(line)
+        if not line.startswith("{"):
+            lower = line.lower()
+            if "you've hit your limit" in lower or "rate limit" in lower:
+                print(f"{C.YELLOW}{ICONS['rate_limit']} {line}{C.RESET}")
+                stderr(line)
+                return
+            if "error" in lower:
+                print(f"{C.RED}{line}{C.RESET}")
+                stderr(line)
+                return
+            # Other non-JSON output
+            if DEBUG:
+                print(
+                    f"{C.DIM}[DEBUG] Non-JSON line: {line[:100]}{C.RESET}", flush=True
+                )
+            else:
+                print(f"{C.DIM}{line}{C.RESET}")
             return
 
         # Try to parse as JSON
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
-            # Not JSON - might be error or plain output
-            if line and not line.startswith("{"):
+            if DEBUG:
+                print(
+                    f"{C.DIM}[DEBUG] Failed to parse JSON: {line[:100]}{C.RESET}",
+                    flush=True,
+                )
+            else:
                 print(f"{C.DIM}{line}{C.RESET}")
             return
 
         self.handle_message(data)
 
     def handle_message(self, data: dict):
-        """Handle a parsed JSON message."""
+        """Handle a parsed JSON message (OpenCode format)."""
         msg_type = data.get("type", "")
-        event = data.get("event", "")
+        part = data.get("part", {})
+        part_type = part.get("type", "")
 
-        # Handle OpenCode event format
-        if event:
-            self.handle_event(data)
-            return
-
-        # Handle standard format
-        if msg_type == "assistant":
-            self.handle_assistant_message(data)
-        elif msg_type == "content_block_start":
-            self.handle_block_start(data.get("content_block", {}))
-        elif msg_type == "content_block_delta":
-            self.handle_block_delta(data.get("delta", {}))
-        elif msg_type == "content_block_stop":
-            self.handle_block_stop()
+        # OpenCode event types
+        if msg_type == "text":
+            self.handle_text(part)
         elif msg_type == "tool_use":
-            self.handle_tool_use(data)
-        elif msg_type == "tool_result":
-            self.handle_tool_result(data)
-        elif msg_type == "message_start":
-            usage = data.get("message", {}).get("usage", {})
-            if usage:
-                self.stats["tokens_in"] = usage.get("input_tokens", 0)
-        elif msg_type == "message_delta":
-            usage = data.get("usage", {})
-            if usage:
-                self.stats["tokens_out"] = usage.get("output_tokens", 0)
+            self.handle_tool_use(part)
+        elif msg_type == "tool_start":
+            self.handle_tool_start(part)
+        elif msg_type == "tool_finish":
+            self.handle_tool_finish(part)
+        elif msg_type == "step_start":
+            self.handle_step_start(part)
+        elif msg_type == "step_finish":
+            self.handle_step_finish(part)
         elif msg_type == "error":
             self.handle_error(data)
-        elif msg_type == "result":
-            self.handle_result(data)
+        # Handle nested part types for backwards compat
+        elif part_type == "text":
+            self.handle_text(part)
+        elif part_type == "tool":
+            self.handle_tool_use(part)
+        elif part_type == "tool-start":
+            self.handle_tool_start(part)
+        elif part_type == "tool-finish":
+            self.handle_tool_finish(part)
+        else:
+            # Log unknown message types for debugging
+            if msg_type:
+                print(
+                    f"{C.DIM}[DEBUG] Unknown message type: {msg_type}{C.RESET}",
+                    flush=True,
+                )
 
-    def handle_event(self, data: dict):
-        """Handle OpenCode event format."""
-        event = data.get("event", "")
-
-        if event == "text":
-            text = data.get("text", "")
+    def handle_text(self, part: dict):
+        """Handle text output from assistant."""
+        text = part.get("text", "")
+        if text:
+            if DEBUG and not self.in_text_block:
+                print(
+                    f"{C.DIM}[DEBUG] Text block started ({len(text)} chars){C.RESET}",
+                    flush=True,
+                )
             print(text, end="", flush=True)
             self.current_text += text
-            if not self.in_text_block:
-                self.in_text_block = True
+            self.in_text_block = True
 
-        elif event == "tool_call":
-            tool_name = data.get("name", "unknown")
-            tool_input = data.get("input", {})
-            icon = get_tool_icon(tool_name)
-            formatted = format_tool_input(tool_name, tool_input)
-            print(
-                f"\n{C.BLUE}{icon} {tool_name}{C.RESET} {C.DIM}-> {formatted}{C.RESET}"
-            )
-            self.stats["tool_calls"] += 1
-            self.current_tool = {"name": tool_name}
+    def handle_tool_use(self, part: dict):
+        """Handle tool invocation with combined start/finish (new format)."""
+        state = part.get("state", {})
+        status = state.get("status", "")
+        tool_name = part.get("tool", "unknown")
+        tool_input = state.get("input", {})
+
+        # End any text block
+        if self.in_text_block:
+            print()
             self.in_text_block = False
 
-        elif event == "tool_result":
-            content = data.get("content", "")
-            is_error = data.get("is_error", False)
+        # Print tool start (only once per tool call)
+        if not self.current_tool or self.current_tool.get("name") != tool_name:
+            icon = get_tool_icon(tool_name)
+            formatted = format_tool_input(tool_name, tool_input)
+
+            if formatted:
+                print(
+                    f"\n{C.BLUE}{icon} {tool_name}{C.RESET} {C.DIM}-> {formatted}{C.RESET}"
+                )
+            else:
+                print(f"\n{C.BLUE}{icon} {tool_name}{C.RESET}")
+
+            if DEBUG:
+                print(f"{C.DIM}[DEBUG] Tool started: {tool_name}{C.RESET}", flush=True)
+
+            self.stats["tool_calls"] += 1
+            self.current_tool = {"name": tool_name}
+
+        # Print tool result if status is completed
+        if status == "completed":
+            output = state.get("output", "")
+            metadata = state.get("metadata", {})
+            is_error = metadata.get("error", False) or state.get("exit", 0) != 0
+
             if is_error:
                 print(
-                    f"{C.RED}{ICONS['error']} Error: {truncate(str(content), 200)}{C.RESET}"
+                    f"{C.RED}{ICONS['error']} Error: {truncate(str(output), 200)}{C.RESET}"
                 )
-                stderr(f"TOOL_ERROR: {content}")
-            elif content and content.strip():
-                formatted = format_tool_result(str(content), max_lines=10)
+                stderr(f"TOOL_ERROR: {output}")
+            elif output and str(output).strip():
+                # If MAX_LINES is 0, show all output without truncation
+                if MAX_LINES == 0:
+                    formatted = str(output)
+                else:
+                    formatted = format_tool_result(str(output), max_lines=MAX_LINES)
                 indented = "\n".join(
                     f"  {C.DIM}{line}{C.RESET}" for line in formatted.split("\n")
                 )
                 print(indented)
 
-        elif event == "error":
-            error_msg = data.get("message", str(data))
-            print(f"\n{C.BG_RED}{C.WHITE} {ICONS['error']} ERROR {C.RESET}")
-            print(f"{C.RED}{error_msg}{C.RESET}")
-            stderr(f"ERROR: {error_msg}")
+            self.current_tool = None
 
-        elif event == "done":
-            usage = data.get("usage", {})
-            if usage:
-                self.stats["tokens_in"] = usage.get("input_tokens", 0)
-                self.stats["tokens_out"] = usage.get("output_tokens", 0)
-
-    def handle_assistant_start(self):
-        """Handle start of assistant response."""
-        if not self.in_text_block:
-            print(f"\n{C.GREEN}{ICONS['assistant']} Assistant{C.RESET}")
-            self.in_text_block = True
-
-    def handle_assistant_message(self, data: dict):
-        """Handle complete assistant message."""
-        message = data.get("message", {})
-        content_blocks = message.get("content", [])
-
-        # Print header
-        print(f"\n{C.GREEN}{ICONS['assistant']} Assistant{C.RESET}")
-
-        # Extract and print text from content blocks
-        for block in content_blocks:
-            block_type = block.get("type", "")
-
-            if block_type == "text":
-                text = block.get("text", "")
-                print(text)
-                self.current_text += text
-
-            elif block_type == "thinking":
-                thinking = block.get("thinking", "")
-                print(f"{C.MAGENTA}{ICONS['thinking']} Thinking:{C.RESET}")
-                print(f"{C.DIM}{thinking}{C.RESET}")
-
-            elif block_type == "tool_use":
-                tool_name = block.get("name", "unknown")
-                tool_input = block.get("input", {})
-                icon = get_tool_icon(tool_name)
-                formatted = format_tool_input(tool_name, tool_input)
-                print(
-                    f"\n{C.BLUE}{icon} {tool_name}{C.RESET} {C.DIM}-> {formatted}{C.RESET}"
-                )
-                self.stats["tool_calls"] += 1
-
-        # Update token stats
-        usage = message.get("usage", {})
-        if usage:
-            self.stats["tokens_in"] = usage.get("input_tokens", 0)
-            self.stats["tokens_out"] = usage.get("output_tokens", 0)
-
-    def handle_block_start(self, block: dict):
-        """Handle start of content block."""
-        block_type = block.get("type", "")
-
-        if block_type == "tool_use":
-            tool_name = block.get("name", "unknown")
-            icon = get_tool_icon(tool_name)
-            print(f"\n{C.BLUE}{icon} {tool_name}{C.RESET}", end="")
-            self.current_tool = {"name": tool_name}
-            self.in_text_block = False
-            self.stats["tool_calls"] += 1
-
-        elif block_type == "thinking":
-            print(f"\n{C.MAGENTA}{ICONS['thinking']} Thinking...{C.RESET}")
-            self.in_text_block = False
-
-        elif block_type == "text":
-            if not self.in_text_block:
-                self.in_text_block = True
-
-    def handle_block_delta(self, delta: dict):
-        """Handle content block delta."""
-        delta_type = delta.get("type", "")
-
-        if delta_type == "text_delta":
-            text = delta.get("text", "")
-            print(text, end="", flush=True)
-            self.current_text += text
-
-        elif delta_type == "input_json_delta":
-            self.tool_input_buffer += delta.get("partial_json", "")
-
-        elif delta_type == "thinking_delta":
-            text = delta.get("thinking", "")
-            print(f"{C.DIM}{text}{C.RESET}", end="", flush=True)
-
-    def handle_block_stop(self):
-        """Handle end of content block."""
+    def handle_tool_start(self, part: dict):
+        """Handle tool invocation start."""
+        # End any text block
         if self.in_text_block:
             print()
+            self.in_text_block = False
 
-        if self.current_tool and self.tool_input_buffer:
-            try:
-                input_data = json.loads(self.tool_input_buffer)
-                formatted = format_tool_input(self.current_tool["name"], input_data)
-                print(f" {C.DIM}-> {formatted}{C.RESET}")
-            except json.JSONDecodeError:
-                pass
-            self.tool_input_buffer = ""
+        tool_name = part.get("tool", "") or part.get("name", "unknown")
+        tool_input = part.get("input", {})
 
-        self.in_text_block = False
-        self.current_tool = None
-
-    def handle_tool_use(self, data: dict):
-        """Handle complete tool use message."""
-        tool_name = data.get("name", "unknown")
-        tool_input = data.get("input", {})
+        icon = get_tool_icon(tool_name)
         formatted = format_tool_input(tool_name, tool_input)
 
-        if not self.tool_input_buffer:
-            icon = get_tool_icon(tool_name)
+        if formatted:
             print(
                 f"\n{C.BLUE}{icon} {tool_name}{C.RESET} {C.DIM}-> {formatted}{C.RESET}"
             )
+        else:
+            print(f"\n{C.BLUE}{icon} {tool_name}{C.RESET}")
 
-    def handle_tool_result(self, data: dict):
+        if DEBUG:
+            print(f"{C.DIM}[DEBUG] Tool started: {tool_name}{C.RESET}", flush=True)
+
+        self.stats["tool_calls"] += 1
+        self.current_tool = {"name": tool_name}
+
+    def handle_tool_finish(self, part: dict):
         """Handle tool result."""
-        content = data.get("content", "")
-        is_error = data.get("is_error", False)
+        output = part.get("output", "")
+        metadata = part.get("metadata", {})
+        is_error = metadata.get("error", False) or part.get("is_error", False)
 
         if is_error:
-            print(f"{C.RED}{ICONS['error']} Error: {truncate(content, 200)}{C.RESET}")
-            stderr(f"TOOL_ERROR: {content}")
-        elif content.strip():
-            formatted = format_tool_result(content, max_lines=10)
+            print(
+                f"{C.RED}{ICONS['error']} Error: {truncate(str(output), 200)}{C.RESET}"
+            )
+            stderr(f"TOOL_ERROR: {output}")
+        elif output and str(output).strip():
+            # If MAX_LINES is 0, show all output without truncation
+            if MAX_LINES == 0:
+                formatted = str(output)
+            else:
+                formatted = format_tool_result(str(output), max_lines=MAX_LINES)
             indented = "\n".join(
                 f"  {C.DIM}{line}{C.RESET}" for line in formatted.split("\n")
             )
             print(indented)
 
+        self.current_tool = None
+
+    def handle_step_start(self, part: dict):
+        """Handle step start (new assistant turn)."""
+        if DEBUG:
+            print(
+                f"\n{C.DIM}[DEBUG] Step started (new assistant turn){C.RESET}",
+                flush=True,
+            )
+        # Could print a header here if desired
+        pass
+
+    def handle_step_finish(self, part: dict):
+        """Handle step finish with token counts."""
+        # End any text block
+        if self.in_text_block:
+            print()
+            self.in_text_block = False
+
+        tokens = part.get("tokens", {})
+        if tokens:
+            self.stats["tokens_in"] = tokens.get("input", 0)
+            self.stats["tokens_out"] = tokens.get("output", 0)
+            self.stats["tokens_reasoning"] = tokens.get("reasoning", 0)
+            cache = tokens.get("cache", {})
+            self.stats["tokens_cache_read"] = cache.get("read", 0)
+            if DEBUG:
+                print(
+                    f"{C.DIM}[DEBUG] Step finished - tokens: in={self.stats['tokens_in']}, out={self.stats['tokens_out']}, reasoning={self.stats['tokens_reasoning']}, cache={self.stats['tokens_cache_read']}{C.RESET}",
+                    flush=True,
+                )
+
     def handle_error(self, data: dict):
         """Handle error message."""
-        error = data.get("error", {})
-        error_msg = error.get("message", str(data))
-        error_type = error.get("type", "unknown")
+        error_msg = data.get("error", "") or data.get("message", str(data))
+        part = data.get("part", {})
+        if part:
+            error_msg = part.get("error", "") or error_msg
 
-        print(f"\n{C.BG_RED}{C.WHITE} {ICONS['error']} ERROR: {error_type} {C.RESET}")
+        print(f"\n{C.BG_RED}{C.WHITE} {ICONS['error']} ERROR {C.RESET}")
         print(f"{C.RED}{error_msg}{C.RESET}")
         stderr(f"ERROR: {error_msg}")
 
-    def handle_result(self, data: dict):
-        """Handle final result."""
-        usage = data.get("usage", {})
-        if usage:
-            self.stats["tokens_in"] = usage.get("input_tokens", 0)
-            self.stats["tokens_out"] = usage.get("output_tokens", 0)
-
     def finalize(self):
         """Print final stats and check for completion signals."""
+        # End any text block
+        if self.in_text_block:
+            print()
+
         duration = (datetime.now() - self.stats["start_time"]).seconds
+
+        # Token summary
+        total_in = self.stats["tokens_in"] + self.stats["tokens_cache_read"]
+
+        if DEBUG:
+            print(
+                f"{C.DIM}[DEBUG] Finalizing: duration={duration}s, tools={self.stats['tool_calls']}, tokens_in={total_in}, tokens_out={self.stats['tokens_out']}{C.RESET}",
+                flush=True,
+            )
 
         print(f"\n{C.DIM}{'─' * 50}{C.RESET}")
         print(
             f"{C.DIM}⏱  {duration}s  │  "
             f"🔧 {self.stats['tool_calls']} tools  │  "
-            f"📥 {self.stats['tokens_in']}  📤 {self.stats['tokens_out']} tokens{C.RESET}"
+            f"📥 {total_in}  📤 {self.stats['tokens_out']} tokens{C.RESET}"
         )
 
-        # Also output to stderr for loop.sh to capture
+        # Output to stderr for loop.sh to capture
         stderr(f"🔧 {self.stats['tool_calls']}")
-        stderr(f"📥 {self.stats['tokens_in']}")
+        stderr(f"📥 {total_in}")
         stderr(f"📤 {self.stats['tokens_out']}")
 
-        # Check for and pass completion signals
+        # Check for and pass completion signals in accumulated text
+        if DEBUG:
+            print(
+                f"{C.DIM}[DEBUG] Checking for completion signals in accumulated text ({len(self.current_text)} chars){C.RESET}",
+                flush=True,
+            )
+
         for line in self.current_text.split("\n"):
             line = line.strip()
             if line.startswith("DONE|"):
                 print(f"{C.GREEN}{ICONS['done']} Task completed{C.RESET}")
                 stderr(line)
+                if DEBUG:
+                    print(
+                        f"{C.DIM}[DEBUG] Found DONE signal: {line}{C.RESET}", flush=True
+                    )
             elif line.startswith("BLOCKED|"):
                 print(f"{C.YELLOW}{ICONS['blocked']} Task blocked{C.RESET}")
                 stderr(line)
+                if DEBUG:
+                    print(
+                        f"{C.DIM}[DEBUG] Found BLOCKED signal: {line}{C.RESET}",
+                        flush=True,
+                    )
 
 
 # ============================================================================
@@ -479,8 +512,16 @@ class StreamProcessor:
 def main():
     processor = StreamProcessor()
 
+    line_count = 0
     try:
         for line in sys.stdin:
+            line_count += 1
+            if line_count == 1:
+                # First line received
+                print(
+                    f"\n{C.DIM}[pretty_print] Receiving stream data...{C.RESET}",
+                    flush=True,
+                )
             processor.process_line(line)
     except KeyboardInterrupt:
         print(f"\n{C.YELLOW}Interrupted{C.RESET}")
