@@ -3,6 +3,7 @@
 # Usage: ./loop.sh
 # Environment vars:
 #   PRETTY_PRINT_DEBUG=1   Enable verbose debug output
+#   PI_MODEL               Model to use (e.g., anthropic/claude-sonnet, google/gemini)
 
 set -e
 
@@ -140,19 +141,26 @@ echo "$CONTEXT" > /tmp/opencode_context_$ITER.txt
 
 echo -e "${DIM}Context saved to: /tmp/opencode_context_$ITER.txt${NC}"
 echo ""
-echo -e "${CYAN}→ Running opencode...${NC}"
+echo -e "${CYAN}→ Running pi...${NC}"
 echo -e "${DIM}[DEBUG] Starting opencode at $(date)${NC}"
 echo ""
 
 START_TIME=$(date +%s)
 
-# Run opencode with JSON format and pretty printer
+# Run pi with JSON format and pretty printer
 # Note: Pretty printer outputs to stdout, stderr goes to stream file for signal parsing
-debug_log "Executing opencode command (stream output: $STREAM_OUTPUT)"
-echo "$CONTEXT" | opencode run --format json 2>&1 | ./pretty_print.py 2> "$STREAM_OUTPUT"
-OPENCODE_EXIT=$?
+debug_log "Executing pi command (stream output: $STREAM_OUTPUT)"
 
-debug_log "opencode finished with exit code: $OPENCODE_EXIT"
+# Build pi command with optional model selection
+PI_CMD="pi --print --mode json"
+if [ -n "$PI_MODEL" ]; then
+    PI_CMD="pi --print --mode json --model $PI_MODEL"
+fi
+
+echo "$CONTEXT" | $PI_CMD 2>&1 | ./pretty_print.py 2> "$STREAM_OUTPUT"
+PI_EXIT=$?
+
+debug_log "pi finished with exit code: $PI_EXIT"
 debug_log "Stream output saved to: $STREAM_OUTPUT"
 if [ -f "$STREAM_OUTPUT" ]; then
     debug_log "Stream output size: $(wc -c < "$STREAM_OUTPUT") bytes"

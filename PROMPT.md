@@ -68,18 +68,16 @@ BLOCKED|<reason max 50 chars>|<what you tried max 80 chars>
 
 ## Tools Reference
 
-- `glob` — Find files by pattern
-- `grep` — Search file contents
 - `read` — Read file contents
 - `write` — Create/overwrite files
 - `edit` — Edit existing files
-- `bash` — Run commands (git, npm, pytest, br, etc.)
-- `task` — Launch subagents for parallel work
-- `question` — Ask user for clarification
+- `bash` — Run commands (git, cargo, br, etc.)
+- `grep` — Search file contents (via bash)
+- `find`/`ls` — Find files (via bash)
 
 ## Testing
 
 Before finishing any task:
-1. Find and run the test command (check package.json, Makefile, pyproject.toml, etc.)
+1. Run tests with `cargo test` (Rust project)
 2. Fix ALL test failures
-3. Run lint/typecheck if available
+3. Run `cargo check` and `cargo clippy` for linting

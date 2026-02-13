@@ -3,6 +3,7 @@
 # Usage: ./run.sh [max_iterations]
 # Environment vars:
 #   PRETTY_PRINT_DEBUG=1   Enable verbose debug output
+#   PI_MODEL               Model to use (e.g., anthropic/claude-sonnet, google/gemini)
 
 set -e
 

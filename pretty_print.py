@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-pretty_print.py - Pretty printer for OpenCode CLI JSON stream output.
+pretty_print.py - Pretty printer for pi CLI JSON stream output.
 
 Handles: assistant messages, tool calls, tool results, errors, rate limits.
 Passes completion signals (DONE|, BLOCKED|) and errors to stderr for loop.sh.
 
-Usage: opencode run --format json "prompt" | ./pretty_print.py
+Usage: pi --print --mode json "prompt" | ./pretty_print.py
 """
 
 import sys
@@ -132,15 +132,17 @@ def format_tool_input(tool_name: str, input_data: dict) -> str:
             "content" in input_data
             or "file_text" in input_data
             or "newString" in input_data
+            or "newText" in input_data
         ):
             content = (
                 input_data.get("content")
                 or input_data.get("file_text")
-                or input_data.get("newString", "")
+                or input_data.get("newString")
+                or input_data.get("newText", "")
             )
             lines = content.count("\n") + 1
             return f"{path} ({lines} lines)"
-        if "oldString" in input_data or "old_str" in input_data:
+        if "oldString" in input_data or "old_str" in input_data or "oldText" in input_data:
             return f"editing {path}"
         return path
     if "query" in input_data or "pattern" in input_data:
@@ -186,7 +188,7 @@ def stderr(msg: str):
 
 
 # ============================================================================
-# STREAM PROCESSOR (OpenCode Format)
+# STREAM PROCESSOR (pi Format)
 # ============================================================================
 
 
@@ -194,13 +196,13 @@ class StreamProcessor:
     def __init__(self):
         self.current_text = ""
         self.in_text_block = False
+        self.in_thinking_block = False
         self.current_tool = None
-        self.tool_input_buffer = ""
+        self.current_tool_id = None
         self.stats = {
             "tool_calls": 0,
             "tokens_in": 0,
             "tokens_out": 0,
-            "tokens_reasoning": 0,
             "tokens_cache_read": 0,
             "start_time": datetime.now(),
         }
@@ -254,197 +256,190 @@ class StreamProcessor:
         self.handle_message(data)
 
     def handle_message(self, data: dict):
-        """Handle a parsed JSON message (OpenCode format)."""
+        """Handle a parsed JSON message (pi format)."""
         msg_type = data.get("type", "")
-        part = data.get("part", {})
-        part_type = part.get("type", "")
 
-        # OpenCode event types
-        if msg_type == "text":
-            self.handle_text(part)
-        elif msg_type == "tool_use":
-            self.handle_tool_use(part)
-        elif msg_type == "tool_start":
-            self.handle_tool_start(part)
-        elif msg_type == "tool_finish":
-            self.handle_tool_finish(part)
-        elif msg_type == "step_start":
-            self.handle_step_start(part)
-        elif msg_type == "step_finish":
-            self.handle_step_finish(part)
+        # pi event types
+        if msg_type == "message_update":
+            self.handle_message_update(data)
+        elif msg_type == "tool_execution_start":
+            self.handle_tool_execution_start(data)
+        elif msg_type == "tool_execution_end":
+            self.handle_tool_execution_end(data)
+        elif msg_type == "turn_end":
+            self.handle_turn_end(data)
+        elif msg_type == "agent_end":
+            self.handle_agent_end(data)
         elif msg_type == "error":
             self.handle_error(data)
-        # Handle nested part types for backwards compat
-        elif part_type == "text":
-            self.handle_text(part)
-        elif part_type == "tool":
-            self.handle_tool_use(part)
-        elif part_type == "tool-start":
-            self.handle_tool_start(part)
-        elif part_type == "tool-finish":
-            self.handle_tool_finish(part)
+        elif msg_type == "session":
+            # Session metadata, ignore
+            pass
+        elif msg_type == "agent_start":
+            if DEBUG:
+                print(f"{C.DIM}[DEBUG] Agent started{C.RESET}", flush=True)
+        elif msg_type == "turn_start":
+            if DEBUG:
+                print(f"{C.DIM}[DEBUG] Turn started{C.RESET}", flush=True)
+        elif msg_type == "message_start":
+            # Message metadata, ignore
+            pass
+        elif msg_type == "message_end":
+            # Message end, ignore
+            pass
         else:
             # Log unknown message types for debugging
-            if msg_type:
+            if msg_type and DEBUG:
                 print(
                     f"{C.DIM}[DEBUG] Unknown message type: {msg_type}{C.RESET}",
                     flush=True,
                 )
 
-    def handle_text(self, part: dict):
-        """Handle text output from assistant."""
-        text = part.get("text", "")
-        if text:
-            if DEBUG and not self.in_text_block:
-                print(
-                    f"{C.DIM}[DEBUG] Text block started ({len(text)} chars){C.RESET}",
-                    flush=True,
-                )
-            print(text, end="", flush=True)
-            self.current_text += text
-            self.in_text_block = True
-
-    def handle_tool_use(self, part: dict):
-        """Handle tool invocation with combined start/finish (new format)."""
-        state = part.get("state", {})
-        status = state.get("status", "")
-        tool_name = part.get("tool", "unknown")
-        tool_input = state.get("input", {})
-
-        # End any text block
-        if self.in_text_block:
-            print()
-            self.in_text_block = False
-
-        # Print tool start (only once per tool call)
-        if not self.current_tool or self.current_tool.get("name") != tool_name:
+    def handle_message_update(self, data: dict):
+        """Handle message_update events from pi."""
+        event = data.get("assistantMessageEvent", {})
+        event_type = event.get("type", "")
+        
+        if event_type == "thinking_start":
+            if not self.in_thinking_block:
+                if DEBUG:
+                    print(f"{C.DIM}[DEBUG] Thinking block started{C.RESET}", flush=True)
+                self.in_thinking_block = True
+                
+        elif event_type == "thinking_delta":
+            # We don't print thinking by default, just accumulate
+            pass
+            
+        elif event_type == "thinking_end":
+            self.in_thinking_block = False
+            if DEBUG:
+                print(f"{C.DIM}[DEBUG] Thinking block ended{C.RESET}", flush=True)
+                
+        elif event_type == "text_start":
+            if not self.in_text_block:
+                if DEBUG:
+                    print(f"{C.DIM}[DEBUG] Text block started{C.RESET}", flush=True)
+                self.in_text_block = True
+                
+        elif event_type == "text_delta":
+            delta = event.get("delta", "")
+            if delta:
+                print(delta, end="", flush=True)
+                self.current_text += delta
+                
+        elif event_type == "text_end":
+            if self.in_text_block:
+                print()  # End the line
+                self.in_text_block = False
+                
+        elif event_type == "toolcall_start":
+            pass  # Tool call starting, wait for delta
+            
+        elif event_type == "toolcall_delta":
+            # Tool call arguments being streamed, we'll handle on toolcall_end
+            pass
+            
+        elif event_type == "toolcall_end":
+            tool_call = event.get("toolCall", {})
+            tool_name = tool_call.get("name", "unknown")
+            tool_args = tool_call.get("arguments", {})
+            tool_id = tool_call.get("id", "")
+            
+            # End any text block
+            if self.in_text_block:
+                print()
+                self.in_text_block = False
+            
+            # Print tool invocation
             icon = get_tool_icon(tool_name)
-            formatted = format_tool_input(tool_name, tool_input)
-
+            formatted = format_tool_input(tool_name, tool_args)
+            
             if formatted:
-                print(
-                    f"\n{C.BLUE}{icon} {tool_name}{C.RESET} {C.DIM}-> {formatted}{C.RESET}"
-                )
+                print(f"\n{C.BLUE}{icon} {tool_name}{C.RESET} {C.DIM}-> {formatted}{C.RESET}")
             else:
                 print(f"\n{C.BLUE}{icon} {tool_name}{C.RESET}")
-
+            
             if DEBUG:
                 print(f"{C.DIM}[DEBUG] Tool started: {tool_name}{C.RESET}", flush=True)
-
+            
             self.stats["tool_calls"] += 1
-            self.current_tool = {"name": tool_name}
+            self.current_tool = tool_name
+            self.current_tool_id = tool_id
 
-        # Print tool result if status is completed
-        if status == "completed":
-            output = state.get("output", "")
-            metadata = state.get("metadata", {})
-            is_error = metadata.get("error", False) or state.get("exit", 0) != 0
-
-            if is_error:
-                print(
-                    f"{C.RED}{ICONS['error']} Error: {truncate(str(output), 200)}{C.RESET}"
-                )
-                stderr(f"TOOL_ERROR: {output}")
-            elif output and str(output).strip():
-                # If MAX_LINES is 0, show all output without truncation
-                if MAX_LINES == 0:
-                    formatted = str(output)
-                else:
-                    formatted = format_tool_result(str(output), max_lines=MAX_LINES)
-                indented = "\n".join(
-                    f"  {C.DIM}{line}{C.RESET}" for line in formatted.split("\n")
-                )
-                print(indented)
-
-            self.current_tool = None
-
-    def handle_tool_start(self, part: dict):
-        """Handle tool invocation start."""
-        # End any text block
-        if self.in_text_block:
-            print()
-            self.in_text_block = False
-
-        tool_name = part.get("tool", "") or part.get("name", "unknown")
-        tool_input = part.get("input", {})
-
-        icon = get_tool_icon(tool_name)
-        formatted = format_tool_input(tool_name, tool_input)
-
-        if formatted:
-            print(
-                f"\n{C.BLUE}{icon} {tool_name}{C.RESET} {C.DIM}-> {formatted}{C.RESET}"
-            )
-        else:
-            print(f"\n{C.BLUE}{icon} {tool_name}{C.RESET}")
-
+    def handle_tool_execution_start(self, data: dict):
+        """Handle tool execution start."""
         if DEBUG:
-            print(f"{C.DIM}[DEBUG] Tool started: {tool_name}{C.RESET}", flush=True)
+            tool_name = data.get("toolName", "unknown")
+            print(f"{C.DIM}[DEBUG] Tool execution started: {tool_name}{C.RESET}", flush=True)
 
-        self.stats["tool_calls"] += 1
-        self.current_tool = {"name": tool_name}
-
-    def handle_tool_finish(self, part: dict):
-        """Handle tool result."""
-        output = part.get("output", "")
-        metadata = part.get("metadata", {})
-        is_error = metadata.get("error", False) or part.get("is_error", False)
-
-        if is_error:
-            print(
-                f"{C.RED}{ICONS['error']} Error: {truncate(str(output), 200)}{C.RESET}"
-            )
-            stderr(f"TOOL_ERROR: {output}")
-        elif output and str(output).strip():
-            # If MAX_LINES is 0, show all output without truncation
-            if MAX_LINES == 0:
-                formatted = str(output)
+    def handle_tool_execution_end(self, data: dict):
+        """Handle tool execution end with result."""
+        tool_name = data.get("toolName", "unknown")
+        result = data.get("result", {})
+        is_error = data.get("isError", False)
+        
+        # Extract text from result
+        output_text = ""
+        if isinstance(result, dict):
+            content = result.get("content", [])
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        output_text += item.get("text", "")
             else:
-                formatted = format_tool_result(str(output), max_lines=MAX_LINES)
+                output_text = str(result)
+        else:
+            output_text = str(result)
+        
+        if is_error:
+            print(f"{C.RED}{ICONS['error']} Error: {truncate(output_text, 200)}{C.RESET}")
+            stderr(f"TOOL_ERROR: {output_text}")
+        elif output_text and output_text.strip():
+            if MAX_LINES == 0:
+                formatted = output_text
+            else:
+                formatted = format_tool_result(output_text, max_lines=MAX_LINES)
             indented = "\n".join(
                 f"  {C.DIM}{line}{C.RESET}" for line in formatted.split("\n")
             )
             print(indented)
-
+        
         self.current_tool = None
+        self.current_tool_id = None
 
-    def handle_step_start(self, part: dict):
-        """Handle step start (new assistant turn)."""
-        if DEBUG:
-            print(
-                f"\n{C.DIM}[DEBUG] Step started (new assistant turn){C.RESET}",
-                flush=True,
-            )
-        # Could print a header here if desired
-        pass
-
-    def handle_step_finish(self, part: dict):
-        """Handle step finish with token counts."""
-        # End any text block
+    def handle_turn_end(self, data: dict):
+        """Handle turn end with token counts."""
         if self.in_text_block:
             print()
             self.in_text_block = False
-
-        tokens = part.get("tokens", {})
-        if tokens:
-            self.stats["tokens_in"] = tokens.get("input", 0)
-            self.stats["tokens_out"] = tokens.get("output", 0)
-            self.stats["tokens_reasoning"] = tokens.get("reasoning", 0)
-            cache = tokens.get("cache", {})
-            self.stats["tokens_cache_read"] = cache.get("read", 0)
+        
+        message = data.get("message", {})
+        usage = message.get("usage", {})
+        
+        if usage:
+            self.stats["tokens_in"] = usage.get("input", 0) + usage.get("cacheRead", 0)
+            self.stats["tokens_out"] = usage.get("output", 0)
+            self.stats["tokens_cache_read"] = usage.get("cacheRead", 0)
+            
             if DEBUG:
                 print(
-                    f"{C.DIM}[DEBUG] Step finished - tokens: in={self.stats['tokens_in']}, out={self.stats['tokens_out']}, reasoning={self.stats['tokens_reasoning']}, cache={self.stats['tokens_cache_read']}{C.RESET}",
+                    f"{C.DIM}[DEBUG] Turn ended - tokens: in={self.stats['tokens_in']}, out={self.stats['tokens_out']}, cache={self.stats['tokens_cache_read']}{C.RESET}",
                     flush=True,
                 )
+
+    def handle_agent_end(self, data: dict):
+        """Handle agent end - final summary."""
+        if self.in_text_block:
+            print()
+            self.in_text_block = False
+        
+        if DEBUG:
+            print(f"{C.DIM}[DEBUG] Agent ended{C.RESET}", flush=True)
 
     def handle_error(self, data: dict):
         """Handle error message."""
         error_msg = data.get("error", "") or data.get("message", str(data))
-        part = data.get("part", {})
-        if part:
-            error_msg = part.get("error", "") or error_msg
-
+        
         print(f"\n{C.BG_RED}{C.WHITE} {ICONS['error']} ERROR {C.RESET}")
         print(f"{C.RED}{error_msg}{C.RESET}")
         stderr(f"ERROR: {error_msg}")
@@ -458,11 +453,12 @@ class StreamProcessor:
         duration = (datetime.now() - self.stats["start_time"]).seconds
 
         # Token summary
-        total_in = self.stats["tokens_in"] + self.stats["tokens_cache_read"]
+        total_in = self.stats["tokens_in"]
+        total_out = self.stats["tokens_out"]
 
         if DEBUG:
             print(
-                f"{C.DIM}[DEBUG] Finalizing: duration={duration}s, tools={self.stats['tool_calls']}, tokens_in={total_in}, tokens_out={self.stats['tokens_out']}{C.RESET}",
+                f"{C.DIM}[DEBUG] Finalizing: duration={duration}s, tools={self.stats['tool_calls']}, tokens_in={total_in}, tokens_out={total_out}{C.RESET}",
                 flush=True,
             )
 
@@ -470,13 +466,13 @@ class StreamProcessor:
         print(
             f"{C.DIM}⏱  {duration}s  │  "
             f"🔧 {self.stats['tool_calls']} tools  │  "
-            f"📥 {total_in}  📤 {self.stats['tokens_out']} tokens{C.RESET}"
+            f"📥 {total_in}  📤 {total_out} tokens{C.RESET}"
         )
 
         # Output to stderr for loop.sh to capture
         stderr(f"🔧 {self.stats['tool_calls']}")
         stderr(f"📥 {total_in}")
-        stderr(f"📤 {self.stats['tokens_out']}")
+        stderr(f"📤 {total_out}")
 
         # Check for and pass completion signals in accumulated text
         if DEBUG:
