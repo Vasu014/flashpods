@@ -152,9 +152,10 @@ START_TIME=$(date +%s)
 debug_log "Executing pi command (stream output: $STREAM_OUTPUT)"
 
 # Build pi command with optional model selection
-PI_CMD="pi --print --mode json"
+# Using --no-session for ephemeral mode (no session file created)
+PI_CMD="pi --print --mode json --no-session"
 if [ -n "$PI_MODEL" ]; then
-    PI_CMD="pi --print --mode json --model $PI_MODEL"
+    PI_CMD="pi --print --mode json --no-session --model $PI_MODEL"
 fi
 
 echo "$CONTEXT" | $PI_CMD 2>&1 | ./pretty_print.py 2> "$STREAM_OUTPUT"
