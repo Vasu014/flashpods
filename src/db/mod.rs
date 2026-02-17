@@ -1,6 +1,8 @@
+pub use jobs::{JobRepository, ResourceUsage};
 pub use pool::DbPool;
 pub use uploads::{FinalizeError, UploadRepository};
 
+mod jobs;
 mod pool;
 mod uploads;
 

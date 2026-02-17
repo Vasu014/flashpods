@@ -10,20 +10,24 @@ use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod jobs;
-mod uploads;
 mod artifacts;
 mod db;
+mod jobs;
 mod models;
+mod podman;
+mod uploads;
 
-use db::{Database, UploadRepository};
+use db::{Database, JobRepository, UploadRepository};
 use models::UploadConfig;
+use podman::PodmanService;
 
 #[derive(Clone)]
 pub struct AppState {
     db: Database,
     upload_repo: Arc<UploadRepository>,
+    job_repo: Arc<JobRepository>,
     upload_config: UploadConfig,
+    podman: Arc<PodmanService>,
 }
 
 #[tokio::main]
@@ -41,12 +45,24 @@ async fn main() -> anyhow::Result<()> {
     info!("Database initialized");
 
     let upload_repo = Arc::new(UploadRepository::new(db.inner().clone()));
+    let job_repo = Arc::new(JobRepository::new(db.inner().clone()));
     let upload_config = UploadConfig::default();
+    let podman = Arc::new(PodmanService::new());
+
+    // Check podman availability
+    if podman.is_available() {
+        let version = podman.version().unwrap_or_else(|_| "unknown".to_string());
+        info!("Podman available: {}", version);
+    } else {
+        tracing::warn!("Podman not available - container operations will fail");
+    }
 
     let state = AppState {
         db,
         upload_repo,
+        job_repo,
         upload_config,
+        podman,
     };
 
     let app = Router::new()
