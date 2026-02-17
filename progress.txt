@@ -1,1 +1,4 @@
 # [iter]|[task_id]|[status]|[summary]|[learnings]
+1|bd-2u8|completed|Rust project structure initialization with module directories and dependencies|Axum 0.7 Router with_state must be called before nest() for sub-routers; DbPool needs Clone derive for AppState; anyhow required for Result type
+1|bd-2u8|→|iteration ran|no signal
+2|bd-157|completed|SQLite schema with 4 tables, 6 indexes, CHECK constraints, and 12 tests|sqlx closures need explicit SqliteRow type annotation; use ?mode=rwc for auto-create; CHECK constraints validate enum values; partial indexes work with WHERE clause; in-memory DB :memory: perfect for tests

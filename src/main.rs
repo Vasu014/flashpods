@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::Serialize;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -13,12 +14,16 @@ mod jobs;
 mod uploads;
 mod artifacts;
 mod db;
+mod models;
 
-use db::Database;
+use db::{Database, UploadRepository};
+use models::UploadConfig;
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     db: Database,
+    upload_repo: Arc<UploadRepository>,
+    upload_config: UploadConfig,
 }
 
 #[tokio::main]
@@ -35,12 +40,21 @@ async fn main() -> anyhow::Result<()> {
     let db = db::init_db("flashpods.db").await?;
     info!("Database initialized");
 
+    let upload_repo = Arc::new(UploadRepository::new(db.inner().clone()));
+    let upload_config = UploadConfig::default();
+
+    let state = AppState {
+        db,
+        upload_repo,
+        upload_config,
+    };
+
     let app = Router::new()
         .route("/health", get(health))
-        .with_state(AppState { db })
         .nest("/uploads", uploads::routes())
         .nest("/jobs", jobs::routes())
-        .nest("/artifacts", artifacts::routes());
+        .nest("/artifacts", artifacts::routes())
+        .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     info!("listening on {}", addr);

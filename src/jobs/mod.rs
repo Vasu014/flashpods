@@ -1,4 +1,6 @@
-pub fn routes() -> axum::Router {
+use crate::AppState;
+
+pub fn routes() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/", axum::routing::post(create_job))
         .route("/:id", axum::routing::get(get_job).delete(kill_job))

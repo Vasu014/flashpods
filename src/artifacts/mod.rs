@@ -1,4 +1,6 @@
-pub fn routes() -> axum::Router {
+use crate::AppState;
+
+pub fn routes() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/", axum::routing::get(list_artifacts))
         .route("/:name", axum::routing::get(download_artifact))
