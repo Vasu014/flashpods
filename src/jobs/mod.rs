@@ -71,12 +71,15 @@ async fn create_job(
         if let Ok(Some(existing_job)) = state.job_repo.get_by_client_id(client_job_id).await {
             // Return existing job if not cleaned
             if existing_job.status != JobStatus::Cleaned {
-                return Ok(Json(CreateJobResponse {
-                    job_id: existing_job.id,
-                    status: existing_job.status,
-                    created: false,
-                    message: Some("Existing job returned (idempotent)".to_string()),
-                }));
+                return Ok((
+                    StatusCode::OK,
+                    Json(CreateJobResponse {
+                        job_id: existing_job.id,
+                        status: existing_job.status,
+                        created: false,
+                        message: Some("Existing job returned (idempotent)".to_string()),
+                    }),
+                ));
             }
         }
     }
@@ -234,12 +237,15 @@ async fn create_job(
         }
     }
 
-    Ok(Json(CreateJobResponse {
-        job_id: job.id,
-        status: JobStatus::Running,
-        created: true,
-        message: None,
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateJobResponse {
+            job_id: job.id,
+            status: JobStatus::Running,
+            created: true,
+            message: None,
+        }),
+    ))
 }
 
 /// Start a container for a job
@@ -413,25 +419,6 @@ async fn list_artifacts(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn create_test_state() -> AppState {
-        use std::sync::Arc;
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let (db, pool) = rt.block_on(async {
-            let db = crate::db::init_db(":memory:").await.unwrap();
-            let pool = db.inner().clone();
-            (db, pool)
-        });
-
-        AppState {
-            db,
-            upload_repo: Arc::new(crate::db::UploadRepository::new(pool.clone())),
-            job_repo: Arc::new(crate::db::JobRepository::new(pool)),
-            upload_config: crate::models::UploadConfig::default(),
-            podman: Arc::new(PodmanService::new()),
-        }
-    }
 
     #[test]
     fn test_resource_limits_clamp() {

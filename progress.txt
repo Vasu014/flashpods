@@ -3,3 +3,4 @@
 1|bd-2u8|→|iteration ran|no signal
 2|bd-157|completed|SQLite schema with 4 tables, 6 indexes, CHECK constraints, and 12 tests|sqlx closures need explicit SqliteRow type annotation; use ?mode=rwc for auto-create; CHECK constraints validate enum values; partial indexes work with WHERE clause; in-memory DB :memory: perfect for tests
 3|bd-26f|completed|File upload endpoints with repository pattern and 10 tests|Repository pattern separates DB logic from handlers; use StatusCode and Json tuple for error responses; calculate_dir_stats walks recursively; quotas checked before finalize; tempfile crate useful for test isolation
+4|bd-2vw|completed|Podman container lifecycle with JobRepository and 11 tests|Podman CLI via std::process::Command is simple and stable; ContainerConfig maps Job to podman args; ResourceLimits::clamp for max enforcement; idempotency via client_job_id; sync podman calls in async handlers need care
