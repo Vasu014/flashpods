@@ -27,8 +27,13 @@ dist/
 build/
 .ruff_cache/
 
+# Node
+node_modules/
+
 # Temporary files
 *.tmp
 *.bak
 *.log
 progress.txt
+session_stats.jsonl
+flashpods.db

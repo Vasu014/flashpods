@@ -1,15 +1,12 @@
 use axum::{
-    extract::State,
-    http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::net::SocketAddr;
-use std::time::Duration;
 use tokio::net::TcpListener;
-use tracing::{info, Level};
+use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod jobs;
@@ -34,7 +31,9 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let db = Database::new("flashpods.db").await?;
+    // Initialize database with migrations
+    let db = db::init_db("flashpods.db").await?;
+    info!("Database initialized");
 
     let app = Router::new()
         .route("/health", get(health))
